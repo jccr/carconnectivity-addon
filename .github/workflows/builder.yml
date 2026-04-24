@@ -149,20 +149,46 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       # ---------------------------------------------------------
-      # SKIP BUILD if image already exists on Docker Hub
+      # SKIP BUILD if image already exists on GHCR
       # ---------------------------------------------------------
       - name: Check if image exists
         id: exist
         env:
           ADDON: ${{ needs.prepare.outputs.addon }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           ARCH="${{ matrix.arch }}"
-          URL="https://hub.docker.com/v2/repositories/jccr/${ADDON}-${ARCH}/tags/${VERSION}/"
+          OWNER="${{ github.repository_owner }}"
+          IMAGE="${ADDON}-${ARCH}"
 
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-          if [ "$STATUS" -eq 200 ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+          # Check if image tag exists using GitHub API
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/orgs/${OWNER}/packages/container/${IMAGE}/versions" 2>/dev/null || echo "404")
+
+          if [ "$STATUS" = "404" ]; then
+            # Try user endpoint if org endpoint fails
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/users/${OWNER}/packages/container/${IMAGE}/versions" 2>/dev/null || echo "404")
+          fi
+
+          if [ "$STATUS" = "200" ]; then
+            # Check if specific version tag exists
+            EXISTS=$(curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/users/${OWNER}/packages/container/${IMAGE}/versions" 2>/dev/null \
+              | jq -r --arg ver "$VERSION" '.[] | select(.metadata.container.tags[] == $ver) | .id' | head -1)
+
+            if [ -n "$EXISTS" ] && [ "$EXISTS" != "null" ]; then
+              echo "exists=true" >> $GITHUB_OUTPUT
+            else
+              echo "exists=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
@@ -174,12 +200,13 @@ jobs:
         if: steps.exist.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v4
 
-      - name: Login to Docker Hub
+      - name: Login to GitHub Container Registry
         if: steps.exist.outputs.exists == 'false'
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # ---------------------------------------------------------
       # BUILD PAR ARCH
@@ -193,10 +220,10 @@ jobs:
           push: true
 
           tags: |
-            jccr/${{ needs.prepare.outputs.addon }}-${{ matrix.arch }}:${{ needs.prepare.outputs.version }}
-            jccr/${{ needs.prepare.outputs.addon }}-${{ matrix.arch }}:latest
-            ${{ matrix.arch == 'aarch64' && format('jccr/{0}-arm64:{1}', needs.prepare.outputs.addon, needs.prepare.outputs.version) || '' }}
-            ${{ matrix.arch == 'aarch64' && format('jccr/{0}-arm64:latest', needs.prepare.outputs.addon) || '' }}
+            ghcr.io/${{ github.repository_owner }}/${{ needs.prepare.outputs.addon }}-${{ matrix.arch }}:${{ needs.prepare.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/${{ needs.prepare.outputs.addon }}-${{ matrix.arch }}:latest
+            ${{ matrix.arch == 'aarch64' && format('ghcr.io/{0}/{1}-arm64:{2}', github.repository_owner, needs.prepare.outputs.addon, needs.prepare.outputs.version) || '' }}
+            ${{ matrix.arch == 'aarch64' && format('ghcr.io/{0}/{1}-arm64:latest', github.repository_owner, needs.prepare.outputs.addon) || '' }}
 
           build-args: |
             BUILD_FROM=${{ steps.meta.outputs.build_from }}
@@ -207,7 +234,7 @@ jobs:
           provenance: false
           sbom: false
 
-          cache-from: type=registry,ref=jccr/${{ needs.prepare.outputs.addon }}-${{ matrix.arch }}:latest
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ needs.prepare.outputs.addon }}-${{ matrix.arch }}:latest
           cache-to: type=inline
 
   # #############################################################
@@ -221,32 +248,34 @@ jobs:
       built: ${{ steps.result.outputs.built }}
 
     steps:
-      - name: Login Docker Hub
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v4
 
       # ---------------------------------------------------------
-      # VÉRIFICATION que les 2 images arch sont bien disponibles
+      # VERIFY that arch images are available on GHCR
       # ---------------------------------------------------------
       - name: Check arch images exist
         env:
           ADDON: ${{ needs.prepare.outputs.addon }}
           VERSION: ${{ needs.prepare.outputs.version }}
           ARCHS: ${{ needs.prepare.outputs.archs }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           for ARCH in $(echo "$ARCHS" | jq -r '.[]'); do
-            URL="https://hub.docker.com/v2/repositories/jccr/${ADDON}-${ARCH}/tags/${VERSION}/"
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-            if [ "$STATUS" -ne 200 ]; then
-              echo "❌ Image jccr/${ADDON}-${ARCH}:${VERSION} not found (HTTP $STATUS)"
+            IMAGE="ghcr.io/${OWNER}/${ADDON}-${ARCH}:${VERSION}"
+            if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1; then
+              echo "✔ ${IMAGE} exists"
+            else
+              echo "❌ ${IMAGE} not found"
               exit 1
             fi
-            echo "✔ jccr/${ADDON}-${ARCH}:${VERSION} exists"
           done
 
       # ---------------------------------------------------------
@@ -257,10 +286,10 @@ jobs:
         env:
           ADDON: ${{ needs.prepare.outputs.addon }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          URL="https://hub.docker.com/v2/repositories/jccr/${ADDON}/tags/${VERSION}/"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-          if [ "$STATUS" -eq 200 ]; then
+          IMAGE="ghcr.io/${OWNER}/${ADDON}:${VERSION}"
+          if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "✔ Manifest ${VERSION} already exists, skipping."
           else
@@ -287,15 +316,17 @@ jobs:
           ADDON: ${{ needs.prepare.outputs.addon }}
           VERSION: ${{ needs.prepare.outputs.version }}
           ARCHS: ${{ needs.prepare.outputs.archs }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          SOURCES=$(echo "$ARCHS" | jq -r --arg addon "$ADDON" --arg ver "$VERSION" '.[] | "jccr/\($addon)-\(.):\($ver)"')
-          docker buildx imagetools create --tag jccr/$ADDON:$VERSION $SOURCES
+          SOURCES=$(echo "$ARCHS" | jq -r --arg addon "$ADDON" --arg ver "$VERSION" --arg owner "$OWNER" '.[] | "ghcr.io/\($owner)/\($addon)-\(.):\($ver)"')
+          docker buildx imagetools create --tag ghcr.io/$OWNER/$ADDON:$VERSION $SOURCES
 
-      # LATEST est toujours mis à jour, indépendamment du check VERSION
+      # LATEST is always updated, regardless of VERSION check
       - name: Create LATEST manifest
         env:
           ADDON: ${{ needs.prepare.outputs.addon }}
           ARCHS: ${{ needs.prepare.outputs.archs }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          SOURCES=$(echo "$ARCHS" | jq -r --arg addon "$ADDON" '.[] | "jccr/\($addon)-\(.):latest"')
-          docker buildx imagetools create --tag jccr/$ADDON:latest $SOURCES
+          SOURCES=$(echo "$ARCHS" | jq -r --arg addon "$ADDON" --arg owner "$OWNER" '.[] | "ghcr.io/\($owner)/\($addon)-\(.):latest"')
+          docker buildx imagetools create --tag ghcr.io/$OWNER/$ADDON:latest $SOURCES
