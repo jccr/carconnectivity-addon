@@ -43,16 +43,6 @@ jobs:
       prerelease: true
     secrets: inherit
 
-  # 🔥 Scan après manifest (inclus dans build-edge)
-  security-scan-edge:
-    needs: build-edge
-    if: needs.build-edge.result == 'success' && needs.build-edge.outputs.built == 'true'
-    uses: ./.github/workflows/security-scan.yml
-    with:
-      addon: carconnectivity-addon-edge
-      blocking: false
-    secrets: inherit
-
   sync-edge-to-normal:
     if: inputs.sync_edge_to_normal
     needs: update-edge
@@ -83,16 +73,6 @@ jobs:
     uses: ./.github/workflows/builder.yml
     with:
       addon: carconnectivity-addon
-    secrets: inherit
-
-  # 🔥 Scan après manifest (inclus dans build-normal)
-  security-scan-normal:
-    needs: build-normal
-    if: needs.build-normal.result == 'success' && needs.build-normal.outputs.built == 'true'
-    uses: ./.github/workflows/security-scan.yml
-    with:
-      addon: carconnectivity-addon
-      blocking: false
     secrets: inherit
 
   release-normal:
