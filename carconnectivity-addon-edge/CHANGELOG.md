@@ -1,3 +1,12 @@
+## 0.6.26
+
+
+### 🛠️ Fixes & Updates
+
+- **CarConnectivity-connector-volkswagen-na** → Using fork with SPIN access token fix ([jccr/CarConnectivity-connector-volkswagen-na@fix/spin-use-access-token](https://github.com/jccr/CarConnectivity-connector-volkswagen-na/tree/fix/spin-use-access-token))
+
+ --- 
+
 ## 0.6.25
 
 
