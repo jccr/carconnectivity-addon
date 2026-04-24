@@ -22,7 +22,7 @@ COPY rootfs /
 WORKDIR /tmp/
 
 RUN echo "ADDON_VERSION=v${BUILD_VERSION}" >> versions.txt && \
-    apk add --no-cache --update musl curl nginx py3-pip build-base libffi-dev && \
+    apk add --no-cache --update musl git curl ca-certificates nginx py3-pip build-base libffi-dev && \
     python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install --no-cache \
@@ -31,7 +31,7 @@ RUN echo "ADDON_VERSION=v${BUILD_VERSION}" >> versions.txt && \
         carconnectivity-connector-seatcupra==${SEAT_VERSION#v} \
         carconnectivity-connector-skoda==${SKODA_VERSION#v} \
         carconnectivity-connector-volkswagen==${VW_VERSION#v} \
-        carconnectivity-connector-volkswagen_na==${VWNA_VERSION#v} \
+        git+https://github.com/jccr/CarConnectivity-connector-volkswagen-na.git@fix/spin-use-access-token \
         carconnectivity-connector-tronity==${TRONITY_VERSION#v} \
         carconnectivity-plugin-abrp==${ABRP_VERSION#v} \
         carconnectivity-plugin-mqtt==${MQTT_VERSION#v} \
